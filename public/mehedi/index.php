@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../../app/bootstrap.php';
 require_once __DIR__ . '/../../app/orders.php';
+require_once __DIR__ . '/../../app/admin-products.php';
 
 no_cache();
 header('X-LiteSpeed-Cache-Control: no-cache');
@@ -18,7 +19,7 @@ ini_set('session.use_only_cookies', '1');
 session_name('ibadah_admin');
 session_cache_limiter('');
 session_set_cookie_params([
-    'path' => rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/mehedi/index.php'), '/') . '/',
+    'path' => '/mehedi/',
     'secure' => is_https(),
     'httponly' => true,
     'samesite' => 'Lax',
@@ -201,30 +202,6 @@ function admin_update_stock(PDO $db): void
     }
 }
 
-function admin_update_product(PDO $db): void
-{
-    $product = admin_input('product');
-    $name = trim(admin_input('name'));
-    $previousName = admin_input('previous_name');
-    $price = admin_number(admin_input('price'), 1, 10000000);
-    $previousPrice = admin_number(admin_input('previous_price'), 1, 10000000);
-    $active = admin_number(admin_input('active'), 0, 1);
-    $previousActive = admin_number(admin_input('previous_active'), 0, 1);
-    if ($name === '' || preg_match('/^.{1,120}$/usD', $name) !== 1) {
-        throw new DomainException('Enter a product name with up to 120 characters.');
-    }
-    if ($name === $previousName && $price === $previousPrice && $active === $previousActive) {
-        return;
-    }
-    $query = $db->prepare('UPDATE products
-        SET name = ?, price = ?, active = ?
-        WHERE id = ? AND BINARY name = BINARY ? AND price = ? AND active = ?');
-    $query->execute([$name, $price, $active, $product, $previousName, $previousPrice, $previousActive]);
-    if ($query->rowCount() !== 1) {
-        throw new DomainException('This product changed since you opened the page. Check the current details and try again.');
-    }
-}
-
 function admin_money(int|string $amount): string
 {
     return '৳' . number_format((int) $amount);
@@ -244,6 +221,7 @@ try {
     $db = db();
     $account = admin_user($db);
     $_SESSION['csrf'] ??= bin2hex(random_bytes(32));
+    $productFormError = '';
 
     $action = admin_input('action');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
@@ -272,10 +250,20 @@ try {
                     $target = '?view=stock';
                     admin_update_stock($db);
                     admin_redirect($target, 'Stock saved.');
+                case 'product_create':
+                    $target = '?view=product-new';
+                    $productId = admin_create_product($db, $_POST, $_FILES['photo'] ?? null);
+                    admin_redirect('?view=product&id=' . rawurlencode($productId), 'Product added.');
                 case 'product':
-                    $target = '?view=stock';
-                    admin_update_product($db);
+                    $productId = admin_product_id(admin_input('product'));
+                    $target = '?view=product&id=' . rawurlencode($productId);
+                    admin_update_product_details($db, $productId, $_POST, $_FILES['photo'] ?? null);
                     admin_redirect($target, 'Product saved.');
+                case 'variant_add':
+                    $productId = admin_product_id(admin_input('product'));
+                    $target = '?view=product&id=' . rawurlencode($productId);
+                    admin_add_product_variant($db, $productId, $_POST);
+                    admin_redirect('?view=stock#product-' . rawurlencode($productId), 'Size added.');
                 case 'password':
                     $target = '?view=account';
                     admin_change_password($db, $account);
@@ -284,12 +272,19 @@ try {
                     throw new DomainException('This action is unavailable.');
             }
         } catch (DomainException | OrderException $error) {
-            admin_redirect($target, $error->getMessage(), true);
+            if ($target === '?view=product-new' || ($action === 'product' && isset($productId))) {
+                $productFormError = $error->getMessage();
+            } else {
+                admin_redirect($target, $error->getMessage(), true);
+            }
         }
     }
 
-    $view = $_GET['view'] ?? 'orders';
-    $notice = $_SESSION['notice'] ?? null;
+    $view = is_string($_GET['view'] ?? null) ? $_GET['view'] : 'orders';
+    $notice = $productFormError === '' ? ($_SESSION['notice'] ?? null) : [$productFormError, true];
+    if ($productFormError !== '') {
+        $view = $action === 'product_create' ? 'product-new' : 'product';
+    }
     unset($_SESSION['notice']);
 
     if ($account && $view === 'order') {
@@ -306,9 +301,30 @@ try {
             http_response_code(404);
         }
     } elseif ($account && $view === 'stock') {
-        $inventory = $db->query('SELECT p.id, p.name, p.price, p.active, v.id AS variant_id, v.size, v.stock
+        $inventory = $db->query('SELECT p.id, p.name, p.category, p.price, p.active, p.image, v.id AS variant_id, v.size, v.stock
             FROM products p LEFT JOIN variants v ON v.product_id = p.id
             ORDER BY p.sort_order, p.id, v.id')->fetchAll(PDO::FETCH_ASSOC | PDO::FETCH_GROUP);
+    } elseif ($account && in_array($view, ['product-new', 'product'], true)) {
+        $editing = $view === 'product';
+        $id = $productId ?? (is_string($_GET['id'] ?? null) ? $_GET['id'] : '');
+        $product = $editing ? admin_read_product($db, $id) : null;
+        if ($editing && !$product) {
+            http_response_code(404);
+        }
+        $version = $product ? admin_product_version($product) : '';
+        $submittedVersion = admin_input('version');
+        $submittedFields = $productFormError !== '' && (!$editing || hash_equals($version, $submittedVersion));
+        $form = $product ?: array_fill_keys(ADMIN_PRODUCT_FIELDS, '');
+        if (!$editing) {
+            $form['active'] = '0';
+        }
+        if ($submittedFields) {
+            foreach (ADMIN_PRODUCT_FIELDS as $field) {
+                $form[$field] = admin_input($field);
+            }
+        }
+        $startingSizes = !$editing && $submittedFields && is_array($_POST['starting_size'] ?? null) ? $_POST['starting_size'] : ['One size'];
+        $startingStocks = !$editing && $submittedFields && is_array($_POST['starting_stock'] ?? null) ? $_POST['starting_stock'] : [];
     } elseif ($account && $view !== 'account') {
         $view = 'orders';
         $filterStatus = is_string($_GET['status'] ?? null) && isset(ADMIN_STATUSES[$_GET['status']])
@@ -353,7 +369,7 @@ try {
         <nav aria-label="Admin navigation">
             <?php if ($account): ?>
                 <a href="?view=orders"<?= in_array($view, ['orders', 'order'], true) ? ' aria-current="page"' : '' ?>>Orders</a>
-                <a href="?view=stock"<?= $view === 'stock' ? ' aria-current="page"' : '' ?>>Inventory</a>
+                <a href="?view=stock"<?= in_array($view, ['stock', 'product-new', 'product'], true) ? ' aria-current="page"' : '' ?>>Inventory</a>
                 <a href="?view=account"<?= $view === 'account' ? ' aria-current="page"' : '' ?>>Account</a>
             <?php endif; ?>
             <a href="../">View shop</a>
@@ -512,30 +528,29 @@ try {
         <?php endif; ?>
 
     <?php elseif ($view === 'stock'): ?>
-        <div class="intro">
-            <h1>Inventory</h1>
-            <p>Set the available quantity for each size. Hidden products are removed from the shop.</p>
+        <div class="intro product-heading">
+            <div>
+                <h1>Inventory</h1>
+                <p>Manage products and stock for each size.</p>
+            </div>
+            <a class="button" href="?view=product-new">Add product</a>
         </div>
-        <?php if (!$inventory): ?><p class="panel muted">No products to show.</p><?php endif; ?>
+        <?php if (!$inventory): ?><p class="panel muted">No products yet.</p><?php endif; ?>
         <?php foreach ($inventory as $productId => $variants): $product = $variants[0]; ?>
             <section class="panel" aria-labelledby="product-<?= e($productId) ?>">
-                <h2 id="product-<?= e($productId) ?>"><?= e($product['name']) ?></h2>
-                <form class="action-row" method="post" action="./">
-                    <?= admin_token_field() ?>
-                    <input type="hidden" name="product" value="<?= e($productId) ?>">
-                    <input type="hidden" name="previous_name" value="<?= e($product['name']) ?>">
-                    <input type="hidden" name="previous_price" value="<?= (int) $product['price'] ?>">
-                    <input type="hidden" name="previous_active" value="<?= (int) $product['active'] ?>">
-                    <label>Name <input name="name" required maxlength="120" value="<?= e($product['name']) ?>"></label>
-                    <label>Price (৳) <input class="price-input" type="number" name="price" min="1" max="10000000" value="<?= (int) $product['price'] ?>" required></label>
-                    <label>Visibility
-                        <select name="active">
-                            <option value="1"<?= (int) $product['active'] === 1 ? ' selected' : '' ?>>Visible</option>
-                            <option value="0"<?= (int) $product['active'] === 0 ? ' selected' : '' ?>>Hidden</option>
-                        </select>
-                    </label>
-                    <button class="button secondary" name="action" value="product">Save product</button>
-                </form>
+                <div class="product-heading">
+                    <div class="product-summary">
+                        <?php if (admin_product_photo_name($product['image'])): ?>
+                            <img src="../media.php?f=<?= e($product['image']) ?>" alt="" width="64" height="64" loading="lazy">
+                        <?php endif; ?>
+                        <div>
+                            <h2 id="product-<?= e($productId) ?>"><?= e($product['name']) ?></h2>
+                            <span class="muted"><?= e($product['category']) ?> · <?= admin_money($product['price']) ?></span>
+                            <span class="badge"><?= (int) $product['active'] === 1 && admin_product_photo_name($product['image']) ? 'Visible' : 'Hidden' ?></span>
+                        </div>
+                    </div>
+                    <a class="button secondary" href="?view=product&amp;id=<?= rawurlencode($productId) ?>">Edit product</a>
+                </div>
                 <?php if (!$product['variant_id']): ?>
                     <p class="muted">No sizes configured.</p>
                 <?php else: ?>
@@ -573,6 +588,96 @@ try {
                 <?php endif; ?>
             </section>
         <?php endforeach; ?>
+
+    <?php elseif ($view === 'product-new' || $view === 'product'): ?>
+        <div class="intro">
+            <p><a href="?view=stock">← Back to inventory</a></p>
+            <h1><?= $editing ? ($product ? 'Edit product' : 'Product not found') : 'Add product' ?></h1>
+        </div>
+        <?php if (!$editing || $product): ?>
+            <section class="panel">
+                <form class="product-form" method="post" enctype="multipart/form-data" action="./">
+                    <?= admin_token_field() ?>
+                    <?php if ($editing): ?>
+                        <input type="hidden" name="product" value="<?= e($product['id']) ?>">
+                        <input type="hidden" name="version" value="<?= e($version) ?>">
+                    <?php endif; ?>
+                    <label class="field-wide">Product name
+                        <input name="name" required maxlength="120" value="<?= e($form['name']) ?>">
+                    </label>
+                    <label>Category
+                        <select name="category" required>
+                            <option value="" disabled<?= $form['category'] === '' ? ' selected' : '' ?>>Choose a category</option>
+                            <?php foreach (ADMIN_PRODUCT_CATEGORIES as $category): ?>
+                                <option value="<?= e($category) ?>"<?= $form['category'] === $category ? ' selected' : '' ?>><?= e($category) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <label>Tone
+                        <select name="finish" required>
+                            <option value="" disabled<?= $form['finish'] === '' ? ' selected' : '' ?>>Choose a tone</option>
+                            <?php foreach (ADMIN_PRODUCT_FINISHES as $finish => $label): ?>
+                                <option value="<?= e($finish) ?>"<?= $form['finish'] === $finish ? ' selected' : '' ?>><?= e($label) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </label>
+                    <label class="field-wide">Finish description (optional)
+                        <input name="finish_label" maxlength="100" value="<?= e($form['finish_label']) ?>">
+                    </label>
+                    <label>Price (৳)
+                        <input type="number" name="price" min="1" max="10000000" required value="<?= e($form['price']) ?>">
+                    </label>
+                    <label>Visibility
+                        <select name="active">
+                            <option value="0"<?= (string) $form['active'] === '0' ? ' selected' : '' ?>>Hidden</option>
+                            <option value="1"<?= (string) $form['active'] === '1' ? ' selected' : '' ?>>Visible in shop</option>
+                        </select>
+                    </label>
+                    <label class="field-wide">Description
+                        <textarea name="description" rows="3" maxlength="2000" required><?= e($form['description']) ?></textarea>
+                    </label>
+                    <label class="field-wide">Materials, dimensions or care (optional)
+                        <textarea name="details" rows="3" maxlength="2000"><?= e($form['details']) ?></textarea>
+                    </label>
+                    <label class="field-wide">Product photo
+                        <input type="file" name="photo" accept="image/jpeg,image/png,image/webp"<?= $editing ? '' : ' required' ?> aria-describedby="photo-help">
+                        <small class="form-help" id="photo-help">JPG, PNG or WebP, up to 5 MB.<?= $editing ? ' Choose a file to replace the current photo.' : '' ?></small>
+                    </label>
+                    <?php if ($editing && admin_product_photo_name($product['image'])): ?>
+                        <img class="product-photo-preview" src="../media.php?f=<?= e($product['image']) ?>" alt="Current product photo" width="96" height="96">
+                    <?php endif; ?>
+                    <?php if (!$editing): ?>
+                        <fieldset class="field-wide starting-sizes">
+                            <legend>Sizes and starting stock</legend>
+                            <p class="form-help">Set the first size and quantity. You can add more sizes after saving.</p>
+                            <?php for ($i = 0; $i < 3; $i++): ?>
+                                <div class="starting-size-row">
+                                    <label><?= $i === 0 ? 'Size' : 'Additional size' ?>
+                                        <input name="starting_size[]" maxlength="24"<?= $i === 0 ? ' required' : '' ?> value="<?= e(is_string($startingSizes[$i] ?? null) ? $startingSizes[$i] : '') ?>">
+                                    </label>
+                                    <label>Starting stock
+                                        <input type="number" name="starting_stock[]" min="0" max="1000000"<?= $i === 0 ? ' required' : '' ?> value="<?= e(is_string($startingStocks[$i] ?? null) ? $startingStocks[$i] : '') ?>">
+                                    </label>
+                                </div>
+                            <?php endfor; ?>
+                        </fieldset>
+                    <?php endif; ?>
+                    <div class="field-wide"><button class="button" name="action" value="<?= $editing ? 'product' : 'product_create' ?>"><?= $editing ? 'Save product' : 'Add product' ?></button></div>
+                </form>
+            </section>
+            <?php if ($editing): ?>
+                <section class="panel">
+                    <h2>Add a size</h2>
+                    <form class="action-row variant-form" method="post" action="./">
+                        <?= admin_token_field() ?>
+                        <input type="hidden" name="product" value="<?= e($product['id']) ?>">
+                        <label>Size <input name="size" maxlength="24" required></label>
+                        <label>Starting stock <input type="number" name="stock" min="0" max="1000000" required></label>
+                        <button class="button secondary" name="action" value="variant_add">Add size</button>
+                    </form>
+                </section>
+            <?php endif; ?>
+        <?php endif; ?>
 
     <?php elseif ($view === 'account'): ?>
         <section class="panel narrow">

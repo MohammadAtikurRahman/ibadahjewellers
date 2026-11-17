@@ -1,0 +1,12 @@
+Options -Indexes -MultiViews
+RewriteEngine On
+
+# Keep the host's certificate validation endpoints reachable.
+RewriteRule ^\.well-known/(?:acme-challenge/[A-Za-z0-9_-]+|pki-validation/[A-Za-z0-9_-]+\.txt)$ - [L]
+
+# The checkout is the document root. Serve only these public entry points.
+RewriteRule ^$ public/index.html [END]
+RewriteRule ^mehedi$ /mehedi/ [R=308,L]
+RewriteRule ^mehedi/$ public/mehedi/index.php [END]
+RewriteRule ^(index\.html|app\.js|styles\.css|setup\.php|setup\.css|media\.php|api/(catalog|checkout)\.php|mehedi/(index\.php|admin\.css))$ public/$1 [END]
+RewriteRule ^ - [R=404,L]

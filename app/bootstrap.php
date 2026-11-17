@@ -5,6 +5,22 @@ declare(strict_types=1);
 date_default_timezone_set('Asia/Dhaka');
 ini_set('display_errors', '0');
 
+function store_private_directory(): string
+{
+    return dirname(__DIR__, 2) . '/ibadahjewellers-private';
+}
+
+function store_media_directory(): string
+{
+    return store_private_directory() . '/media';
+}
+
+function store_photo_exists(string $name): bool
+{
+    return preg_match('/\A[a-f0-9]{32}\.(?:jpg|png|webp)\z/', $name) === 1
+        && is_file(store_media_directory() . '/' . $name);
+}
+
 function config(): array
 {
     static $settings;
@@ -12,7 +28,7 @@ function config(): array
         return $settings;
     }
 
-    $path = __DIR__ . '/config.php';
+    $path = store_private_directory() . '/config.php';
     if (!is_file($path)) {
         throw new RuntimeException('Store configuration is missing.');
     }

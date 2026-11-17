@@ -19,6 +19,10 @@ try {
     );
     $products = [];
     foreach ($rows as $row) {
+        // Only show products with photos uploaded through the current catalogue.
+        if (!store_photo_exists($row['image'])) {
+            continue;
+        }
         $id = $row['id'];
         $products[$id] ??= [
             'id' => $id,

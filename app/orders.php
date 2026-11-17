@@ -58,7 +58,7 @@ function create_order(PDO $db, array $input, string $requestKey): array
         foreach ($lines as $line) {
             $subtotal += $line['price'] * $line['quantity'];
         }
-        $discount = $order['coupon'] === 'IBADAH10' ? intdiv($subtotal + 5, 10) : 0;
+        $discount = 0;
         $wrapping = $order['giftWrap'] ? 100 : 0;
         $shipping = 0;
         if ($subtotal - $discount < 2500) {
@@ -122,7 +122,7 @@ function normalize_order_input(array $input): array
     }
 
     $coupon = strtoupper(order_text($input['coupon'] ?? null, 'promo code', 16));
-    if (!in_array($coupon, ['', 'IBADAH10'], true)) {
+    if ($coupon !== '') {
         throw new OrderException('That promo code is unavailable.', 422);
     }
 
@@ -192,7 +192,7 @@ function order_text(mixed $raw, string $label, int $limit, bool $required = fals
 
 function lock_order_variants(PDO $db, array $items): array
 {
-    $getProduct = $db->prepare('SELECT name, price, active FROM products WHERE id = ? FOR UPDATE');
+    $getProduct = $db->prepare('SELECT name, price, active, image FROM products WHERE id = ? FOR UPDATE');
     $getVariant = $db->prepare('SELECT id, size, stock FROM variants WHERE product_id = ? AND size = ? FOR UPDATE');
     $lines = [];
     $productId = null;
@@ -203,7 +203,7 @@ function lock_order_variants(PDO $db, array $items): array
             $productId = $item['productId'];
             $getProduct->execute([$productId]);
             $product = $getProduct->fetch(PDO::FETCH_ASSOC);
-            if (!$product || (int) $product['active'] !== 1) {
+            if (!$product || (int) $product['active'] !== 1 || !store_photo_exists($product['image'])) {
                 throw new OrderException('A piece in your bag is no longer available.', 409);
             }
         }
