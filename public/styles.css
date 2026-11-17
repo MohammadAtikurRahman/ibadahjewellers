@@ -126,3 +126,39 @@
 @media(max-width:767px) {
   .hero-photograph { height: clamp(225px, 73vw, 460px); }
 }
+
+.store-logo {
+  display: block;
+  width: auto;
+  max-width: 180px;
+  height: 68px;
+  object-fit: contain;
+}
+.hero h1 { white-space: pre-line; overflow-wrap: anywhere; }
+.hero-copy > p { white-space: pre-line; overflow-wrap: anywhere; }
+.hero-custom-photo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  overflow: hidden;
+}
+.hero-custom-photo > img { width: 100%; height: 100%; object-fit: cover; }
+.design-banner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--cream);
+}
+.design-banner-photo { position: relative; min-height: 420px; overflow: hidden; }
+.design-banner-photo > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.design-banner-copy {
+  align-self: center;
+  padding: 60px clamp(30px, 6vw, 100px);
+}
+.design-banner-copy h2 { white-space: pre-line; overflow-wrap: anywhere; }
+.design-banner-copy p { max-width: 420px; white-space: pre-line; overflow-wrap: anywhere; margin-bottom: 30px; }
+@media(max-width:767px) {
+  .store-logo { max-width: 125px; height: 49px; }
+  .design-banner { grid-template-columns: 1fr; }
+  .design-banner-photo { min-height: 0; aspect-ratio: 4/3; }
+  .design-banner-copy { padding: 38px 24px; }
+}

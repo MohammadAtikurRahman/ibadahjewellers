@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/../../app/bootstrap.php';
 require __DIR__ . '/../../app/http.php';
+require __DIR__ . '/../../app/store-design.php';
 
 require_method('GET');
 
@@ -48,7 +49,15 @@ try {
     }
     unset($product);
 
+    $design = read_store_design();
+    foreach (STORE_DESIGN_IMAGES as $key) {
+        if (!store_photo_exists($design[$key])) {
+            $design[$key] = '';
+        }
+    }
+
     json_response([
+        'design' => $design,
         'products' => array_values($products),
         'checkoutEnabled' => can_use_private_routes() && checkout_enabled($connection),
     ]);

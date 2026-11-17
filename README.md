@@ -1,6 +1,6 @@
 # Ibadah Jewellers
 
-The storefront, Cash on Delivery checkout, inventory and `/mehedi/` admin are all in this repository. It runs on PHP and MySQL. This installation starts with an empty catalogue.
+The storefront, Cash on Delivery checkout, inventory, Design controls and `/mehedi/` admin are all in this repository. It runs on PHP and MySQL. This installation starts with an empty catalogue.
 
 ## First install on cPanel
 
@@ -8,11 +8,11 @@ This guide assumes your domain serves `/home/CPANEL_USER/public_html/`. Check **
 
 ### 1. Clone into the document root
 
-The GitHub repository is private. Configure a read-only GitHub deploy key on the cPanel account before cloning. You can clone with **Git Version Control** or with cPanel Terminal:
+Clone the repository with **Git Version Control** or with cPanel Terminal:
 
 ```sh
 cd ~
-git clone --branch main --single-branch git@github.com:MohammadAtikurRahman/ibadahjewellers.git public_html
+git clone --branch main --single-branch https://github.com/MohammadAtikurRahman/ibadahjewellers.git public_html
 ```
 
 Git can clone into an existing empty `public_html`. If it already contains files, back them up and check for hosting files or another site before changing that directory. The repository's root `.htaccess` serves the storefront directly at `/` and routes `/api/` and `/mehedi/`. Leave the repository layout intact. If you upload a GitHub ZIP instead, extract the contents of the ZIP's top-level project folder into `public_html/`, including the root `.htaccess`.
@@ -62,15 +62,27 @@ For a domain that serves a different directory directly under your cPanel home, 
 3. Set `checkout_enabled` to `true` in the private configuration. Place a test COD order and confirm it appears under **Orders**. Cancelling it restores the reserved stock.
 4. If LiteSpeed page caching is enabled, exclude `/api/`, `/mehedi/` and `/setup.php`. Check that `/api/catalog.php` returns JSON and that `/database/schema.sql` and `/.git/HEAD` return 404 or 403.
 
-[cPanel private repository access](https://docs.cpanel.net/knowledge-base/web-services/guide-to-git-set-up-access-to-private-repositories/) · [Database Wizard](https://docs.cpanel.net/cpanel/databases/database-wizard/) · [phpMyAdmin](https://docs.cpanel.net/cpanel/databases/phpmyadmin/)
+[Database Wizard](https://docs.cpanel.net/cpanel/databases/database-wizard/) · [phpMyAdmin](https://docs.cpanel.net/cpanel/databases/phpmyadmin/)
 
 ## Orders and inventory
 
 - Orders accept cash on delivery. Delivery is BDT 80 within Dhaka or BDT 120 outside Dhaka, with free delivery at BDT 2,500 in merchandise. Optional gift wrapping is BDT 100.
 - The server confirms totals, saves orders and reserves stock per product size. Customers receive a reference after the order is saved.
-- In **Orders**, confirm the order, then mark it **Shipped** or **Completed** as it progresses. Cancelling a pending or confirmed order returns the reserved stock once.
-- In **Inventory**, change the available stock, product details, photo or visibility. Store product photos as JPG, PNG or WebP. Your hosting upload limit also applies.
-- Keep backups of the database and the private `media/` folder. Pull code updates with `git pull --ff-only` inside the cloned directory. The database and uploaded photos are retained separately.
+- In **Orders**, search by reference, customer name or phone and filter by status. Confirm the order, then mark it **Shipped** or **Completed** as it progresses. Cancelling a pending or confirmed order returns the reserved stock once.
+- In **Inventory**, enter **Available quantity** for a product with a single size. A pair of earrings sold as a pair counts as one item. For rings or other size choices, open **This product has different sizes**, select **Track quantity separately for each size** and enter the quantity for each size. For example, US 6 with 4 pieces and US 7 with 6 pieces gives 10 pieces in total. Orders reserve only the chosen size. A quantity of zero means sold out.
+- Use the inventory filters to find products with low stock or zero total stock. Individual sizes also show low-stock badges. The stock form sets the current quantity available to sell. For example, if 3 are available and you receive 7 more, enter 10. If an order changes the count while you edit, refresh the current quantity before saving.
+- Product name, details, price, photo and visibility can be edited in Inventory. Store product photos as JPG, PNG or WebP. Your hosting upload limit also applies.
+- Keep backups of the database, private `media/` folder and private `design.json` file. Pull code updates with `git pull --ff-only origin main` inside the cloned directory.
+
+## Design
+
+Open **Design** in the admin navigation to upload or replace the logo, hero image and middle banner. Logo, hero and banner use separate upload fields. The logo appears in the header and footer. The uploaded hero photo fills the right side of the opening section, and the middle banner appears after the products.
+
+You can edit the hero and banner headings and descriptions. Choose **Remove current image** to clear a photo, then save. An empty logo uses the shop's text wordmark. When the hero photo is empty, the shop can feature a published product. The middle banner appears when its photo is set.
+
+JPG, PNG and WebP uploads are supported up to 5 MB, subject to the hosting upload limit. A transparent PNG works well for the logo. Use a clear, centred subject for the hero photo because it crops to fill its frame. Design changes are saved in `~/ibadahjewellers-private/design.json`, and the photos are saved in its `media/` folder.
+
+This Design and inventory update uses the existing database tables. After pulling the update, sign in to the admin to use the new controls.
 
 Store contact: **info@ibadahejewellery.com**, **Mirpur 1**.
 

@@ -1,6 +1,15 @@
 'use strict';
 
 let products = [];
+let storeDesign = {
+  logo:'',
+  hero_image:'',
+  banner_image:'',
+  hero_title:'The pieces\nwe keep close.',
+  hero_description:'Explore jewellery for every day, special occasions and thoughtful gifts.',
+  banner_title:'Made for your moments.',
+  banner_description:'Explore the jewellery collection.'
+};
 const categories = ['All','Earrings','Necklaces','Rings','Bracelets'];
 const BAG_KEY = 'ibadah-jewellers-bag-v2';
 const WISHLIST_KEY = 'ibadah-jewellers-wishlist-v1';
@@ -10,8 +19,9 @@ const FREE_DELIVERY = 2500;
 const WRAP_FEE = 100;
 const $ = id => document.getElementById(id);
 const productById = id => products.find(p=>p.id===id);
-const imageFor = product => /^[a-f0-9]{32}\.(jpg|png|webp)$/.test(product.image)
-  ? './media.php?f='+encodeURIComponent(product.image) : '';
+const mediaUrl = name => /^[a-f0-9]{32}\.(jpg|png|webp)$/.test(name)
+  ? './media.php?f='+encodeURIComponent(name) : '';
+const imageFor = product => mediaUrl(product.image);
 const money = amount => '৳'+new Intl.NumberFormat('en-BD').format(amount);
 const escapeHTML = value => String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icon = (name,classes='') => `<svg class="icon ${classes}" aria-hidden="true"><use href="#icon-${name}"/></svg>`;
@@ -67,7 +77,34 @@ function readBag(){
   }
   return {items,giftWrap:false};
 }
+function renderDesign(){
+  const logoUrl=mediaUrl(storeDesign.logo);
+  document.querySelectorAll('[data-store-logo]').forEach(image=>{
+    image.hidden=!logoUrl;
+    if(logoUrl)image.src=logoUrl;
+    else image.removeAttribute('src');
+  });
+  document.querySelectorAll('[data-store-wordmark]').forEach(text=>text.hidden=Boolean(logoUrl));
+  $('heroTitle').textContent=storeDesign.hero_title;
+  $('heroDescription').textContent=storeDesign.hero_description;
+  $('heroDescription').hidden=!storeDesign.hero_description;
+  const bannerUrl=mediaUrl(storeDesign.banner_image);
+  $('designBanner').hidden=!bannerUrl;
+  if(bannerUrl)$('designBannerImage').src=bannerUrl;
+  else $('designBannerImage').removeAttribute('src');
+  $('designBannerTitle').textContent=storeDesign.banner_title;
+  $('designBannerDescription').textContent=storeDesign.banner_description;
+  $('designBannerDescription').hidden=!storeDesign.banner_description;
+}
 function renderHero(){
+  const customUrl=mediaUrl(storeDesign.hero_image);
+  $('heroCustomPhoto').hidden=!customUrl;
+  if(customUrl){
+    $('heroDesignImage').src=customUrl;
+    $('heroProduct').hidden=true;
+    return;
+  }
+  $('heroDesignImage').removeAttribute('src');
   const featured=products.find(product=>!isSoldOut(product)&&imageFor(product))
     ?? products.find(product=>imageFor(product));
   const button=$('heroProduct');
@@ -105,6 +142,11 @@ async function loadCatalogue(){
     const catalogue=await response.json();
     if(!Array.isArray(catalogue.products))throw new Error('Invalid catalogue');
     products=catalogue.products;
+    if(catalogue.design && typeof catalogue.design==='object' && !Array.isArray(catalogue.design)){
+      for(const key of Object.keys(storeDesign)){
+        if(typeof catalogue.design[key]==='string')storeDesign[key]=catalogue.design[key];
+      }
+    }
     checkoutEnabled=catalogue.checkoutEnabled===true;
     catalogueState='ready';
     if(firstLoad){
@@ -119,6 +161,7 @@ async function loadCatalogue(){
     checkoutEnabled=false;
   }
   syncFilterForm();
+  renderDesign();
   renderHero();
   renderProducts();
   renderWishlist();
@@ -447,7 +490,15 @@ async function submitOrder(event){
 // One delegated listener keeps generated catalogue, bag and wishlist controls consistent.
 document.addEventListener('error',event=>{
   const image=event.target;
-  if(image.id==='heroImage'){
+  if(image.id==='heroDesignImage'){
+    storeDesign.hero_image='';
+    renderHero();
+  }else if(image.id==='designBannerImage'){
+    $('designBanner').hidden=true;
+  }else if(image.tagName==='IMG' && image.matches('[data-store-logo]')){
+    image.hidden=true;
+    image.closest('.wordmark').querySelectorAll('[data-store-wordmark]').forEach(text=>text.hidden=false);
+  }else if(image.id==='heroImage'){
     image.hidden=true;
     $('heroProduct').hidden=true;
   }else if(image.tagName==='IMG' && image.closest('.product-picture')){

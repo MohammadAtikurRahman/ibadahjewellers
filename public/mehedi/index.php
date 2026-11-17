@@ -4,6 +4,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/../../app/bootstrap.php';
 require_once __DIR__ . '/../../app/orders.php';
 require_once __DIR__ . '/../../app/admin-products.php';
+require_once __DIR__ . '/../../app/store-design.php';
+require_once __DIR__ . '/../../app/admin-design.php';
 
 no_cache();
 header('X-LiteSpeed-Cache-Control: no-cache');
@@ -225,8 +227,11 @@ try {
 
     $action = admin_input('action');
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-        $target = './';
+        $target = ($_GET['view'] ?? '') === 'design' ? '?view=design' : './';
         try {
+            if ((int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0 && $_POST === [] && $_FILES === []) {
+                throw new DomainException('The upload exceeds the server limit. Try smaller images or save one image at a time.');
+            }
             if (!hash_equals($_SESSION['csrf'], admin_input('token'))) {
                 throw new DomainException('This form expired. Try again.');
             }
@@ -264,6 +269,10 @@ try {
                     $target = '?view=product&id=' . rawurlencode($productId);
                     admin_add_product_variant($db, $productId, $_POST);
                     admin_redirect('?view=stock#product-' . rawurlencode($productId), 'Size added.');
+                case 'design_save':
+                    $target = '?view=design';
+                    admin_update_design($_POST, $_FILES);
+                    admin_redirect($target, 'Design saved.');
                 case 'password':
                     $target = '?view=account';
                     admin_change_password($db, $account);
@@ -301,9 +310,17 @@ try {
             http_response_code(404);
         }
     } elseif ($account && $view === 'stock') {
+        $stockFilter = is_string($_GET['availability'] ?? null) && in_array($_GET['availability'], ['low', 'out'], true)
+            ? $_GET['availability'] : '';
         $inventory = $db->query('SELECT p.id, p.name, p.category, p.price, p.active, p.image, v.id AS variant_id, v.size, v.stock
             FROM products p LEFT JOIN variants v ON v.product_id = p.id
             ORDER BY p.sort_order, p.id, v.id')->fetchAll(PDO::FETCH_ASSOC | PDO::FETCH_GROUP);
+        if ($stockFilter !== '') {
+            $inventory = array_filter($inventory, static function (array $variants) use ($stockFilter): bool {
+                $quantity = array_sum(array_column($variants, 'stock'));
+                return $stockFilter === 'out' ? $quantity === 0 : $quantity > 0 && $quantity <= 5;
+            });
+        }
     } elseif ($account && in_array($view, ['product-new', 'product'], true)) {
         $editing = $view === 'product';
         $id = $productId ?? (is_string($_GET['id'] ?? null) ? $_GET['id'] : '');
@@ -323,25 +340,45 @@ try {
                 $form[$field] = admin_input($field);
             }
         }
-        $startingSizes = !$editing && $submittedFields && is_array($_POST['starting_size'] ?? null) ? $_POST['starting_size'] : ['One size'];
+        $startingSizes = !$editing && $submittedFields && is_array($_POST['starting_size'] ?? null) ? $_POST['starting_size'] : [];
         $startingStocks = !$editing && $submittedFields && is_array($_POST['starting_stock'] ?? null) ? $_POST['starting_stock'] : [];
+        $useSizes = !$editing && $submittedFields
+            && (admin_input('use_sizes') === '1' || !array_key_exists('quantity', $_POST));
+        $startingQuantity = !$editing && $submittedFields ? admin_input('quantity') : '0';
+    } elseif ($account && $view === 'design') {
+        $design = read_store_design();
+        $designVersion = store_design_version($design);
     } elseif ($account && $view !== 'account') {
         $view = 'orders';
         $filterStatus = is_string($_GET['status'] ?? null) && isset(ADMIN_STATUSES[$_GET['status']])
             ? $_GET['status'] : '';
+        $search = is_string($_GET['q'] ?? null) && strlen($_GET['q']) <= 400 ? trim($_GET['q']) : '';
         $page = filter_input(INPUT_GET, 'page', FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) ?: 1;
         $statusCounts = array_fill_keys(array_keys(ADMIN_STATUSES), 0);
         foreach ($db->query('SELECT status, COUNT(*) AS count FROM orders GROUP BY status') as $row) {
             $statusCounts[$row['status']] = (int) $row['count'];
         }
-        $count = $filterStatus === '' ? array_sum($statusCounts) : $statusCounts[$filterStatus];
+        $conditions = [];
+        $parameters = [];
+        if ($filterStatus !== '') {
+            $conditions[] = 'status = :status';
+            $parameters['status'] = $filterStatus;
+        }
+        if ($search !== '') {
+            $conditions[] = "(reference LIKE :reference_search ESCAPE '!' OR customer_name LIKE :name_search ESCAPE '!' OR phone LIKE :phone_search ESCAPE '!')";
+            $searchPattern = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $search) . '%';
+            $parameters += ['reference_search' => $searchPattern, 'name_search' => $searchPattern, 'phone_search' => $searchPattern];
+        }
+        $where = $conditions ? ' WHERE ' . implode(' AND ', $conditions) : '';
+        $countQuery = $db->prepare("SELECT COUNT(*) FROM orders$where");
+        $countQuery->execute($parameters);
+        $count = (int) $countQuery->fetchColumn();
         $pageCount = max(1, (int) ceil($count / ADMIN_PAGE_SIZE));
         $page = min($page, $pageCount);
-        $where = $filterStatus === '' ? '' : ' WHERE status = :status';
         $query = $db->prepare("SELECT id, reference, customer_name, phone, total, status, created_at
             FROM orders$where ORDER BY id DESC LIMIT :limit OFFSET :offset");
-        if ($filterStatus !== '') {
-            $query->bindValue(':status', $filterStatus);
+        foreach ($parameters as $key => $value) {
+            $query->bindValue(':' . $key, $value);
         }
         $query->bindValue(':limit', ADMIN_PAGE_SIZE, PDO::PARAM_INT);
         $query->bindValue(':offset', ($page - 1) * ADMIN_PAGE_SIZE, PDO::PARAM_INT);
@@ -360,7 +397,7 @@ try {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Ibadah Jewellers | Admin</title>
-    <link rel="stylesheet" href="admin.css">
+    <link rel="stylesheet" href="admin.css?v=2">
 </head>
 <body>
 <header>
@@ -370,6 +407,7 @@ try {
             <?php if ($account): ?>
                 <a href="?view=orders"<?= in_array($view, ['orders', 'order'], true) ? ' aria-current="page"' : '' ?>>Orders</a>
                 <a href="?view=stock"<?= in_array($view, ['stock', 'product-new', 'product'], true) ? ' aria-current="page"' : '' ?>>Inventory</a>
+                <a href="?view=design"<?= $view === 'design' ? ' aria-current="page"' : '' ?>>Design</a>
                 <a href="?view=account"<?= $view === 'account' ? ' aria-current="page"' : '' ?>>Account</a>
             <?php endif; ?>
             <a href="../">View shop</a>
@@ -408,6 +446,9 @@ try {
         <section class="panel">
             <form class="action-row" method="get" action="./">
                 <input type="hidden" name="view" value="orders">
+                <label class="order-search">Find an order
+                    <input type="search" name="q" placeholder="Reference, name or phone" maxlength="100" value="<?= e($search) ?>">
+                </label>
                 <label>Status
                     <select name="status">
                         <option value="">All orders</option>
@@ -416,8 +457,10 @@ try {
                         <?php endforeach; ?>
                     </select>
                 </label>
-                <button class="button secondary">Filter</button>
+                <button class="button secondary">Search</button>
+                <?php if ($search !== '' || $filterStatus !== ''): ?><a href="?view=orders">Clear filters</a><?php endif; ?>
             </form>
+            <p class="muted"><?= $count ?> <?= $count === 1 ? 'order' : 'orders' ?> found.</p>
             <?php if (!$orders): ?>
                 <p class="muted">No orders to show.</p>
             <?php else: ?>
@@ -439,11 +482,11 @@ try {
                 <?php if ($pageCount > 1): ?>
                     <div class="pager action-row">
                         <?php if ($page > 1): ?>
-                            <a class="button secondary" href="?view=orders&amp;status=<?= e($filterStatus) ?>&amp;page=<?= $page - 1 ?>">Previous</a>
+                            <a class="button secondary" href="?view=orders&amp;status=<?= e($filterStatus) ?>&amp;q=<?= rawurlencode($search) ?>&amp;page=<?= $page - 1 ?>">Previous</a>
                         <?php endif; ?>
                         <span>Page <?= $page ?> of <?= $pageCount ?></span>
                         <?php if ($page < $pageCount): ?>
-                            <a class="button secondary" href="?view=orders&amp;status=<?= e($filterStatus) ?>&amp;page=<?= $page + 1 ?>">Next</a>
+                            <a class="button secondary" href="?view=orders&amp;status=<?= e($filterStatus) ?>&amp;q=<?= rawurlencode($search) ?>&amp;page=<?= $page + 1 ?>">Next</a>
                         <?php endif; ?>
                     </div>
                 <?php endif; ?>
@@ -531,12 +574,28 @@ try {
         <div class="intro product-heading">
             <div>
                 <h1>Inventory</h1>
-                <p>Manage products and stock for each size.</p>
+                <p>Available quantity is how many units you can sell now. An order reduces it automatically, and cancellation returns it.</p>
             </div>
             <a class="button" href="?view=product-new">Add product</a>
         </div>
-        <?php if (!$inventory): ?><p class="panel muted">No products yet.</p><?php endif; ?>
-        <?php foreach ($inventory as $productId => $variants): $product = $variants[0]; $hasPhoto = store_photo_exists($product['image']); ?>
+        <form class="action-row" method="get" action="./">
+            <input type="hidden" name="view" value="stock">
+            <label>Availability
+                <select name="availability">
+                    <option value="">All products</option>
+                    <option value="low"<?= $stockFilter === 'low' ? ' selected' : '' ?>>Low stock · 1–5 available</option>
+                    <option value="out"<?= $stockFilter === 'out' ? ' selected' : '' ?>>Sold out</option>
+                </select>
+            </label>
+            <button class="button secondary">Filter</button>
+        </form>
+        <?php if (!$inventory): ?><p class="panel muted"><?= $stockFilter === '' ? 'No products yet.' : 'No products match this filter.' ?></p><?php endif; ?>
+        <?php foreach ($inventory as $productId => $variants):
+            $product = $variants[0];
+            $hasPhoto = store_photo_exists($product['image']);
+            $totalQuantity = array_sum(array_column($variants, 'stock'));
+            $singleQuantity = count($variants) === 1 && $product['size'] === 'One size';
+        ?>
             <section class="panel" aria-labelledby="product-<?= e($productId) ?>">
                 <div class="product-heading">
                     <div class="product-summary">
@@ -547,24 +606,39 @@ try {
                             <h2 id="product-<?= e($productId) ?>"><?= e($product['name']) ?></h2>
                             <span class="muted"><?= e($product['category']) ?> · <?= admin_money($product['price']) ?></span>
                             <span class="badge"><?= (int) $product['active'] === 1 && $hasPhoto ? 'Visible' : 'Hidden' ?></span>
+                            <?php if ($totalQuantity === 0): ?>
+                                <span class="badge" data-stock="out">Sold out</span>
+                            <?php elseif ($totalQuantity <= 5): ?>
+                                <span class="badge" data-stock="low">Low stock</span>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <a class="button secondary" href="?view=product&amp;id=<?= rawurlencode($productId) ?>">Edit product</a>
                 </div>
                 <?php if (!$product['variant_id']): ?>
                     <p class="muted">No sizes configured.</p>
+                <?php elseif ($singleQuantity): ?>
+                    <form class="simple-stock-form" method="post" action="./">
+                        <?= admin_token_field() ?>
+                        <input type="hidden" name="variant" value="<?= (int) $product['variant_id'] ?>">
+                        <input type="hidden" name="previous_stock" value="<?= (int) $product['stock'] ?>">
+                        <label for="stock-<?= (int) $product['variant_id'] ?>">Available quantity
+                            <input id="stock-<?= (int) $product['variant_id'] ?>" type="number" name="stock" min="0" max="1000000" value="<?= (int) $product['stock'] ?>" required>
+                        </label>
+                        <button class="button" name="action" value="stock">Save quantity</button>
+                    </form>
                 <?php else: ?>
                     <div class="table-wrap" tabindex="0" role="region" aria-label="<?= e($product['name']) ?> stock">
                         <table class="stock-table">
-                            <thead><tr><th scope="col">Size</th><th scope="col">Availability</th><th scope="col">Stock</th></tr></thead>
+                            <thead><tr><th scope="col">Size</th><th scope="col">Availability</th><th scope="col">Available quantity</th></tr></thead>
                             <tbody>
                             <?php foreach ($variants as $variant): $stock = (int) $variant['stock']; ?>
                                 <tr>
                                     <td><?= e($variant['size']) ?></td>
                                     <td>
                                         <?php if ($stock === 0): ?>
-                                            <span class="badge" data-stock="out">Out of stock</span>
-                                        <?php elseif ($stock <= 3): ?>
+                                            <span class="badge" data-stock="out">Sold out</span>
+                                        <?php elseif ($stock <= 5): ?>
                                             <span class="badge" data-stock="low">Low stock</span>
                                         <?php else: ?>
                                             <span class="badge">In stock</span>
@@ -575,9 +649,9 @@ try {
                                             <?= admin_token_field() ?>
                                             <input type="hidden" name="variant" value="<?= (int) $variant['variant_id'] ?>">
                                             <input type="hidden" name="previous_stock" value="<?= $stock ?>">
-                                            <label class="visually-hidden" for="stock-<?= (int) $variant['variant_id'] ?>"><?= e($product['name'] . ' ' . $variant['size']) ?> stock</label>
+                                            <label class="visually-hidden" for="stock-<?= (int) $variant['variant_id'] ?>"><?= e($product['name'] . ' ' . $variant['size']) ?> available quantity</label>
                                             <input id="stock-<?= (int) $variant['variant_id'] ?>" type="number" name="stock" min="0" max="1000000" value="<?= $stock ?>" required>
-                                            <button class="button" name="action" value="stock">Save stock</button>
+                                            <button class="button" name="action" value="stock">Save quantity</button>
                                         </form>
                                     </td>
                                 </tr>
@@ -647,37 +721,95 @@ try {
                         <img class="product-photo-preview" src="../media.php?f=<?= e($product['image']) ?>" alt="Current product photo" width="96" height="96">
                     <?php endif; ?>
                     <?php if (!$editing): ?>
-                        <fieldset class="field-wide starting-sizes">
-                            <legend>Sizes and starting stock</legend>
-                            <p class="form-help">Set the first size and quantity. You can add more sizes after saving.</p>
+                        <label class="field-wide quantity-field">Available quantity
+                            <input type="number" name="quantity" min="0" max="1000000" value="<?= e($startingQuantity) ?>" aria-describedby="quantity-help">
+                            <small class="form-help" id="quantity-help">Enter how many units you have ready to sell. For 10 pairs of earrings, enter 10. Use 0 for sold out.</small>
+                        </label>
+                        <details class="field-wide starting-sizes"<?= $useSizes ? ' open' : '' ?>>
+                            <summary>This product has different sizes</summary>
+                            <label class="checkbox-label"><input type="checkbox" name="use_sizes" value="1"<?= $useSizes ? ' checked' : '' ?>>Track quantity separately for each size</label>
+                            <p class="form-help">When checked, enter the quantity for each size below. The available quantity above is ignored. Leave unused rows blank.</p>
                             <?php for ($i = 0; $i < 3; $i++): ?>
                                 <div class="starting-size-row">
-                                    <label><?= $i === 0 ? 'Size' : 'Additional size' ?>
-                                        <input name="starting_size[]" maxlength="24"<?= $i === 0 ? ' required' : '' ?> value="<?= e(is_string($startingSizes[$i] ?? null) ? $startingSizes[$i] : '') ?>">
+                                    <label><?= $i === 0 ? 'Size' : 'Additional size (optional)' ?>
+                                        <input name="starting_size[]" maxlength="24" placeholder="<?= $i === 0 ? 'US 6' : 'US ' . (6 + $i) ?>" value="<?= e(is_string($startingSizes[$i] ?? null) ? $startingSizes[$i] : '') ?>">
                                     </label>
-                                    <label>Starting stock
-                                        <input type="number" name="starting_stock[]" min="0" max="1000000"<?= $i === 0 ? ' required' : '' ?> value="<?= e(is_string($startingStocks[$i] ?? null) ? $startingStocks[$i] : '') ?>">
+                                    <label>Available quantity
+                                        <input type="number" name="starting_stock[]" min="0" max="1000000" value="<?= e(is_string($startingStocks[$i] ?? null) ? $startingStocks[$i] : '') ?>">
                                     </label>
                                 </div>
                             <?php endfor; ?>
-                        </fieldset>
+                            <p class="form-help size-note">You can add more sizes after saving the product.</p>
+                        </details>
                     <?php endif; ?>
                     <div class="field-wide"><button class="button" name="action" value="<?= $editing ? 'product' : 'product_create' ?>"><?= $editing ? 'Save product' : 'Add product' ?></button></div>
                 </form>
             </section>
             <?php if ($editing): ?>
-                <section class="panel">
-                    <h2>Add a size</h2>
+                <p><a href="?view=stock#product-<?= rawurlencode($product['id']) ?>">Manage available quantities</a></p>
+                <details class="panel size-details">
+                    <summary>Add another size</summary>
                     <form class="action-row variant-form" method="post" action="./">
                         <?= admin_token_field() ?>
                         <input type="hidden" name="product" value="<?= e($product['id']) ?>">
                         <label>Size <input name="size" maxlength="24" required></label>
-                        <label>Starting stock <input type="number" name="stock" min="0" max="1000000" required></label>
+                        <label>Available quantity <input type="number" name="stock" min="0" max="1000000" required></label>
                         <button class="button secondary" name="action" value="variant_add">Add size</button>
                     </form>
-                </section>
+                </details>
             <?php endif; ?>
         <?php endif; ?>
+
+    <?php elseif ($view === 'design'): ?>
+        <div class="intro">
+            <h1>Design</h1>
+            <p>Choose your logo, hero photo and middle banner.</p>
+        </div>
+        <form class="design-form" method="post" enctype="multipart/form-data" action="./?view=design">
+            <?= admin_token_field() ?>
+            <input type="hidden" name="version" value="<?= e($designVersion) ?>">
+            <div class="design-images">
+                <?php foreach (['logo' => 'Logo', 'hero_image' => 'Hero image', 'banner_image' => 'Middle banner'] as $key => $label): ?>
+                    <section class="panel design-image-field">
+                        <h2><?= e($label) ?></h2>
+                        <?php if (store_photo_exists($design[$key])): ?>
+                            <img class="design-image-preview<?= $key === 'logo' ? ' logo-preview' : '' ?>" src="../media.php?f=<?= e($design[$key]) ?>" alt="Current <?= e(strtolower($label)) ?>" width="360" height="200">
+                        <?php else: ?>
+                            <p class="muted">No image selected.</p>
+                        <?php endif; ?>
+                        <label>Choose <?= e(strtolower($label)) ?>
+                            <input type="file" name="<?= e($key) ?>" accept="image/jpeg,image/png,image/webp">
+                        </label>
+                        <p class="form-help"><?= $key === 'logo' ? 'Shown in the header and footer. A transparent PNG works well.' : ($key === 'hero_image' ? 'Shown beside the opening headline. Keep the subject near the centre.' : 'Shown after the products. Use a landscape photo.') ?></p>
+                        <?php if ($design[$key] !== ''): ?>
+                            <label class="checkbox-label"><input type="checkbox" name="remove_<?= e($key) ?>" value="1">Remove current image</label>
+                        <?php endif; ?>
+                    </section>
+                <?php endforeach; ?>
+            </div>
+            <p class="form-help">JPG, PNG or WebP, up to 5 MB per image. Your hosting upload limit also applies.</p>
+            <div class="design-copy-fields">
+                <section class="panel">
+                    <h2>Hero text</h2>
+                    <label>Heading
+                        <textarea name="hero_title" maxlength="120" rows="2" required><?= e($design['hero_title']) ?></textarea>
+                    </label>
+                    <label>Description
+                        <textarea name="hero_description" maxlength="500" rows="3"><?= e($design['hero_description']) ?></textarea>
+                    </label>
+                </section>
+                <section class="panel">
+                    <h2>Middle banner text</h2>
+                    <label>Heading
+                        <textarea name="banner_title" maxlength="120" rows="2"><?= e($design['banner_title']) ?></textarea>
+                    </label>
+                    <label>Description
+                        <textarea name="banner_description" maxlength="500" rows="3"><?= e($design['banner_description']) ?></textarea>
+                    </label>
+                </section>
+            </div>
+            <button class="button" name="action" value="design_save">Save design</button>
+        </form>
 
     <?php elseif ($view === 'account'): ?>
         <section class="panel narrow">

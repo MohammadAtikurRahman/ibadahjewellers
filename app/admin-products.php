@@ -66,12 +66,12 @@ function admin_product_variants(mixed $sizes, mixed $stocks): array
 {
     if (!is_array($sizes) || !array_is_list($sizes) || !is_array($stocks) || !array_is_list($stocks)
         || count($sizes) !== count($stocks) || count($sizes) > 3) {
-        throw new DomainException('Enter each size with a starting stock count.');
+        throw new DomainException('Enter each size with its available quantity.');
     }
     $variants = [];
     foreach ($sizes as $index => $size) {
         $stock = $stocks[$index];
-        if ($index > 0 && $size === '' && $stock === '') {
+        if ($size === '' && $stock === '') {
             continue;
         }
         $variants[] = [
@@ -80,7 +80,7 @@ function admin_product_variants(mixed $sizes, mixed $stocks): array
         ];
     }
     if (!$variants) {
-        throw new DomainException('Enter at least one size and its starting stock.');
+        throw new DomainException('Enter at least one size and its available quantity.');
     }
     return $variants;
 }
@@ -162,7 +162,11 @@ function admin_insert_product_variant(PDOStatement $insert, string $product, str
 function admin_create_product(PDO $db, array $input, mixed $file): string
 {
     $fields = admin_product_fields($input);
-    $variants = admin_product_variants($input['starting_size'] ?? null, $input['starting_stock'] ?? null);
+    if (array_key_exists('quantity', $input) && ($input['use_sizes'] ?? '') !== '1') {
+        $variants = [['One size', admin_product_integer($input['quantity'], 'available quantity', 0, 1000000)]];
+    } else {
+        $variants = admin_product_variants($input['starting_size'] ?? null, $input['starting_stock'] ?? null);
+    }
     $id = 'p-' . bin2hex(random_bytes(10));
     $image = admin_save_product_photo($file, required: true);
 
