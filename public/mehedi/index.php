@@ -536,17 +536,17 @@ try {
             <a class="button" href="?view=product-new">Add product</a>
         </div>
         <?php if (!$inventory): ?><p class="panel muted">No products yet.</p><?php endif; ?>
-        <?php foreach ($inventory as $productId => $variants): $product = $variants[0]; ?>
+        <?php foreach ($inventory as $productId => $variants): $product = $variants[0]; $hasPhoto = store_photo_exists($product['image']); ?>
             <section class="panel" aria-labelledby="product-<?= e($productId) ?>">
                 <div class="product-heading">
                     <div class="product-summary">
-                        <?php if (admin_product_photo_name($product['image'])): ?>
+                        <?php if ($hasPhoto): ?>
                             <img src="../media.php?f=<?= e($product['image']) ?>" alt="" width="64" height="64" loading="lazy">
                         <?php endif; ?>
                         <div>
                             <h2 id="product-<?= e($productId) ?>"><?= e($product['name']) ?></h2>
                             <span class="muted"><?= e($product['category']) ?> · <?= admin_money($product['price']) ?></span>
-                            <span class="badge"><?= (int) $product['active'] === 1 && admin_product_photo_name($product['image']) ? 'Visible' : 'Hidden' ?></span>
+                            <span class="badge"><?= (int) $product['active'] === 1 && $hasPhoto ? 'Visible' : 'Hidden' ?></span>
                         </div>
                     </div>
                     <a class="button secondary" href="?view=product&amp;id=<?= rawurlencode($productId) ?>">Edit product</a>
@@ -643,7 +643,7 @@ try {
                         <input type="file" name="photo" accept="image/jpeg,image/png,image/webp"<?= $editing ? '' : ' required' ?> aria-describedby="photo-help">
                         <small class="form-help" id="photo-help">JPG, PNG or WebP, up to 5 MB.<?= $editing ? ' Choose a file to replace the current photo.' : '' ?></small>
                     </label>
-                    <?php if ($editing && admin_product_photo_name($product['image'])): ?>
+                    <?php if ($editing && store_photo_exists($product['image'])): ?>
                         <img class="product-photo-preview" src="../media.php?f=<?= e($product['image']) ?>" alt="Current product photo" width="96" height="96">
                     <?php endif; ?>
                     <?php if (!$editing): ?>

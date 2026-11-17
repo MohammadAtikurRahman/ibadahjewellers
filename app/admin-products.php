@@ -85,11 +85,6 @@ function admin_product_variants(mixed $sizes, mixed $stocks): array
     return $variants;
 }
 
-function admin_product_photo_name(string $name): bool
-{
-    return preg_match('/\A[a-f0-9]{32}\.(?:jpg|png|webp)\z/', $name) === 1;
-}
-
 function admin_save_product_photo(mixed $file, bool $required): ?string
 {
     if ($file === null || (is_array($file) && ($file['error'] ?? null) === UPLOAD_ERR_NO_FILE)) {
@@ -133,7 +128,7 @@ function admin_save_product_photo(mixed $file, bool $required): ?string
 
 function admin_remove_product_photo(?string $name): void
 {
-    if ($name !== null && admin_product_photo_name($name)) {
+    if ($name !== null && store_photo_exists($name)) {
         @unlink(store_media_directory() . '/' . $name);
     }
 }
@@ -208,8 +203,7 @@ function admin_update_product_details(PDO $db, string $id, array $input, mixed $
             throw new DomainException('This product changed since you opened it. Review the current details and try again.');
         }
         $image = $newImage ?? $current['image'];
-        if ($fields['active'] === 1 && (!admin_product_photo_name($image)
-            || !is_file(store_media_directory() . '/' . $image))) {
+        if ($fields['active'] === 1 && !store_photo_exists($image)) {
             throw new DomainException('Upload a product photo before making this product visible.');
         }
 
